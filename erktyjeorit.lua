@@ -14339,7 +14339,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 spectatorGui.IgnoreGuiInset = true
                 spectatorGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
                 spectatorGui.DisplayOrder = 999
-                local _guiParent = (type(gethui) == 'function' and pcall(function() return gethui() end) and gethui()) or LocalPlayer:WaitForChild('PlayerGui')
+                local _guiParent = (type(gethui) == 'function' and pcall(function() return gethui() end) and gethui()) or game:GetService('CoreGui') or LocalPlayer:FindFirstChild('PlayerGui')
                 spectatorGui.Parent = _guiParent
 
                 local specWin = createCoincideWindow({
@@ -17887,9 +17887,12 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
                     end
 
                     if type(hookfunction) == 'function' then
-                        local oldFireServer = gunFire.FireServer
-                        hookfunction(gunFire.FireServer, function(self, packed, hitInstances, effect)
-                            return fireGun(oldFireServer, self, packed, hitInstances, effect)
+                        local oldFireServer
+                        oldFireServer = hookfunction(gunFire.FireServer, function(self, packed, hitInstances, effect)
+                            if self == gunFire then
+                                return fireGun(oldFireServer, self, packed, hitInstances, effect)
+                            end
+                            return oldFireServer(self, packed, hitInstances, effect)
                         end)
                     end
                     hookedFire = true
