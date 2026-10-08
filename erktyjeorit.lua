@@ -2521,8 +2521,14 @@ safeConnect(RunService.RenderStepped, function()
             if type(BacktrackApi.muzzleOrigin) == 'function' then
                 origin = BacktrackApi.muzzleOrigin()
             end
-            local registers = true
-            if type(BacktrackApi.wouldRegister) == 'function' then
+            local passesChance = true
+            if type(BacktrackApi.peekTriggerUseGhost) == 'function' then
+                passesChance = BacktrackApi.peekTriggerUseGhost() == true
+            elseif type(BacktrackApi.peekUseGhost) == 'function' then
+                passesChance = BacktrackApi.peekUseGhost() == true
+            end
+            local registers = passesChance
+            if registers and type(BacktrackApi.wouldRegister) == 'function' then
                 registers = BacktrackApi.wouldRegister(origin, live, gpl) == true
             end
             if registers then
@@ -4689,20 +4695,25 @@ do
             local function getRoleToggle(role, suffix, fallback)
                 role = normalizeRoleText(role)
                 local id = roleOptionId(role, suffix)
-                if Toggles and Toggles[id] then
-                    return getToggle(id, fallback)
+                if Toggles and Toggles[id] ~= nil then
+                    return Toggles[id].Value == true
                 end
 
                 if suffix == 'Enabled' then
-                    if role == 'Target' then return getToggle('RoleESPShowTarget', fallback) end
-                    if role == 'Friend' then return getToggle('RoleESPShowFriend', fallback) end
-                    return getToggle('RoleESPShowNeutral', fallback)
+                    if role == 'Target' and Toggles and Toggles.RoleESPShowTarget ~= nil then return Toggles.RoleESPShowTarget.Value == true end
+                    if role == 'Friend' and Toggles and Toggles.RoleESPShowFriend ~= nil then return Toggles.RoleESPShowFriend.Value == true end
+                    if Toggles and Toggles.RoleESPShowNeutral ~= nil then return Toggles.RoleESPShowNeutral.Value == true end
+                    return fallback == true
                 end
-                if suffix == 'Names' then return getToggle('RoleESPShowNames', fallback) end
-                if suffix == 'Box' then return getToggle('RoleESPShowBox', fallback) end
-                if suffix == 'Tracers' then return getToggle('RoleESPShowTracers', fallback) end
-                if suffix == 'HealthBar' then return getToggle('RoleESPShowHealthBar', fallback) end
-                if suffix == 'Armor' then return getToggle('RoleESPShowArmor', fallback) end
+
+                local globalId = 'ESP' .. suffix
+                if suffix == 'Box' then globalId = 'ESPBoxes' end
+                if suffix == 'HealthBar' then globalId = 'ESPHealthBar' end
+                if suffix == 'Tracers' then globalId = 'ESPTracers' end
+                if suffix == 'Names' then globalId = 'ESPNames' end
+                if Toggles and Toggles[globalId] ~= nil then
+                    return Toggles[globalId].Value == true
+                end
                 return fallback == true
             end
 
@@ -4777,9 +4788,11 @@ do
                 if not player or player == LocalPlayer then
                     return false
                 end
+                if not getToggle('ESPEnabled', false) then
+                    return false
+                end
                 local role = getPlayerRole(player)
-                local defaultEnabled = role == 'Target' or role == 'Friend'
-                return getRoleToggle(role, 'Enabled', defaultEnabled)
+                return getRoleToggle(role, 'Enabled', true)
             end
 
             local function clearRoleESPForPlayer(player)
@@ -4857,53 +4870,70 @@ do
                 armorLabel.Visible = false
                 armorLabel.Parent = g
 
-                local box = Drawing.new('Square')
-                box.Visible = false
-                box.Filled = false
-                box.Thickness = 2
-                box.Transparency = 1
-
-                local boxOutline = Drawing.new('Square')
+                local boxOutline = Instance.new('Frame')
+                boxOutline.Name = 'BoxOutline'
+                boxOutline.BackgroundTransparency = 1
+                boxOutline.BorderSizePixel = 0
                 boxOutline.Visible = false
-                boxOutline.Filled = false
-                boxOutline.Thickness = 4
-                boxOutline.Color = Color3.new(0, 0, 0)
-                boxOutline.Transparency = 1
+                boxOutline.Parent = g
+                local boxOutStroke = Instance.new('UIStroke')
+                boxOutStroke.Color = Color3.new(0, 0, 0)
+                boxOutStroke.Thickness = 2
+                boxOutStroke.Parent = boxOutline
 
-                local tracer = Drawing.new('Line')
+                local box = Instance.new('Frame')
+                box.Name = 'Box'
+                box.BackgroundTransparency = 1
+                box.BorderSizePixel = 0
+                box.Visible = false
+                box.Parent = g
+                local boxInStroke = Instance.new('UIStroke')
+                boxInStroke.Color = Color3.new(1, 1, 1)
+                boxInStroke.Thickness = 1
+                boxInStroke.Parent = box
+
+                local tracer = Instance.new('Frame')
+                tracer.Name = 'Tracer'
+                tracer.AnchorPoint = Vector2.new(0, 0.5)
+                tracer.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                tracer.BorderSizePixel = 0
                 tracer.Visible = false
-                tracer.Thickness = 1.5
-                tracer.Transparency = 1
+                tracer.Parent = g
 
-                local hbar = Drawing.new('Square')
-                hbar.Visible = false
-                hbar.Filled = true
-                hbar.Transparency = 1
-
-                local hbarOutline = Drawing.new('Square')
+                local hbarOutline = Instance.new('Frame')
+                hbarOutline.Name = 'HBarOutline'
+                hbarOutline.BackgroundColor3 = Color3.new(0, 0, 0)
+                hbarOutline.BorderSizePixel = 0
                 hbarOutline.Visible = false
-                hbarOutline.Filled = false
-                hbarOutline.Color = Color3.new(0, 0, 0)
-                hbarOutline.Thickness = 2
-                hbarOutline.Transparency = 1
+                hbarOutline.Parent = g
 
-                local abar = Drawing.new('Square')
-                abar.Visible = false
-                abar.Filled = true
-                abar.Transparency = 1
+                local hbar = Instance.new('Frame')
+                hbar.Name = 'HBar'
+                hbar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+                hbar.BorderSizePixel = 0
+                hbar.Visible = false
+                hbar.Parent = g
 
-                local abarOutline = Drawing.new('Square')
+                local abarOutline = Instance.new('Frame')
+                abarOutline.Name = 'ABarOutline'
+                abarOutline.BackgroundColor3 = Color3.new(0, 0, 0)
+                abarOutline.BorderSizePixel = 0
                 abarOutline.Visible = false
-                abarOutline.Filled = false
-                abarOutline.Color = Color3.new(0, 0, 0)
-                abarOutline.Thickness = 2
-                abarOutline.Transparency = 1
+                abarOutline.Parent = g
+
+                local abar = Instance.new('Frame')
+                abar.Name = 'ABar'
+                abar.BackgroundColor3 = Color3.fromRGB(0, 180, 255)
+                abar.BorderSizePixel = 0
+                abar.Visible = false
+                abar.Parent = g
 
                 objs.gui = g
                 objs.nameLabel = nameLabel
                 objs.distLabel = distLabel
                 objs.armorLabel = armorLabel
                 objs.box = box
+                objs.boxStroke = boxInStroke
                 objs.boxOutline = boxOutline
                 objs.tracer = tracer
                 objs.hbar = hbar
@@ -4954,13 +4984,15 @@ do
                 local dist = (Camera.CFrame.Position - rootPart.Position).Magnitude
 
                 local bx, by, bw, bh
-                if head and rootOnScreen then
-                    local headSP = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-                    local feetSP = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
-                    bh = math.max(math.abs(headSP.Y - feetSP.Y), 10)
-                    bw = bh / 2
-                    bx = headSP.X - bw / 2
-                    by = headSP.Y - bh * 0.1
+                if head and (rootOnScreen or nameOnScreen or (rootSP and rootSP.Z > 0)) then
+                    local headSP, headVis = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                    local feetSP, feetVis = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 3, 0))
+                    if (headSP.Z > 0 or feetSP.Z > 0) and (headVis or feetVis or rootOnScreen or nameOnScreen) then
+                        bh = math.max(math.abs(headSP.Y - feetSP.Y), 12)
+                        bw = math.max(bh * 0.5, 6)
+                        bx = headSP.X - bw * 0.5
+                        by = headSP.Y - bh * 0.05
+                    end
                 end
 
                 local labelCenterX = bx and (bx + (bw / 2) - 90) or (nameSP.X - 90)
@@ -4972,8 +5004,8 @@ do
                 local armorValue = showArmor and getPlayerArmor(player) or nil
 
                 if objs.nameLabel then
-                    if showName and nameOnScreen then
-                        objs.nameLabel.Text = role .. ' | ' .. (player.DisplayName or player.Name)
+                    if showName and (nameOnScreen or (nameSP and nameSP.Z > 0)) then
+                        objs.nameLabel.Text = (player.DisplayName and player.DisplayName ~= '' and player.DisplayName or player.Name)
                         objs.nameLabel.TextColor3 = namesColor
                         local nameY = by and (showArmorText and (by - 38) or (by - 24)) or (showArmorText and (nameSP.Y - 38) or (nameSP.Y - 28))
                         objs.nameLabel.Position = UDim2.new(0, labelCenterX, 0, nameY)
@@ -4984,7 +5016,7 @@ do
                 end
 
                 if objs.armorLabel then
-                    if showArmorText and nameOnScreen and armorValue ~= nil then
+                    if showArmorText and (nameOnScreen or (nameSP and nameSP.Z > 0)) and armorValue ~= nil then
                         objs.armorLabel.Text = string.format('Armor: %d', math.floor(armorValue + 0.5))
                         objs.armorLabel.TextColor3 = armorColor
                         local armorY = by and (by - 20) or (nameSP.Y - 20)
@@ -5006,19 +5038,15 @@ do
                     end
                 end
 
-                if head and rootOnScreen and bx and by and bw and bh then
+                if head and bx and by and bw and bh then
                     if getRoleToggle(role, 'Box', true) then
-                        objs.box.Size = Vector2.new(bw, bh)
-                        objs.box.Position = Vector2.new(bx, by)
-                        objs.box.Color = boxColor
+                        objs.box.Size = UDim2.fromOffset(bw, bh)
+                        objs.box.Position = UDim2.fromOffset(bx, by)
+                        if objs.boxStroke then objs.boxStroke.Color = boxColor end
                         objs.box.Visible = true
-                        objs.boxOutline.Size = objs.box.Size
-                        objs.boxOutline.Position = objs.box.Position
-                        objs.boxOutline.Color = boxColor
-                        objs.boxOutline.Transparency = 0
-                        objs.boxOutline.Visible = true
-                        objs.boxOutline.Size = objs.box.Size
-                        objs.boxOutline.Position = objs.box.Position
+
+                        objs.boxOutline.Size = UDim2.fromOffset(bw, bh)
+                        objs.boxOutline.Position = UDim2.fromOffset(bx, by)
                         objs.boxOutline.Visible = true
                     else
                         objs.box.Visible = false
@@ -5026,15 +5054,17 @@ do
                     end
 
                     if getRoleToggle(role, 'HealthBar', true) and humanoid then
-                        local maxHp = math.max(humanoid.MaxHealth or 1, 1)
-                        local hpRatio = math.clamp(humanoid.Health / maxHp, 0, 1)
-                        local hbh = bh * hpRatio
-                        objs.hbar.Size = Vector2.new(3, hbh)
-                        objs.hbar.Position = Vector2.new(bx - 7, by + (bh - hbh))
-                        objs.hbar.Color = healthBarColor
+                        local maxHp = math.max(humanoid.MaxHealth or 100, 1)
+                        local hp = math.clamp(humanoid.Health or maxHp, 0, maxHp)
+                        local hpRatio = hp / maxHp
+                        local hbh = math.max(bh * hpRatio, 2)
+                        objs.hbar.Size = UDim2.fromOffset(2, hbh)
+                        objs.hbar.Position = UDim2.fromOffset(bx - 5, by + (bh - hbh))
+                        objs.hbar.BackgroundColor3 = healthBarColor
                         objs.hbar.Visible = true
-                        objs.hbarOutline.Size = Vector2.new(3, bh)
-                        objs.hbarOutline.Position = Vector2.new(bx - 7, by)
+
+                        objs.hbarOutline.Size = UDim2.fromOffset(4, bh + 2)
+                        objs.hbarOutline.Position = UDim2.fromOffset(bx - 6, by - 1)
                         objs.hbarOutline.Visible = true
                     else
                         objs.hbar.Visible = false
@@ -5043,13 +5073,14 @@ do
 
                     if showArmorBar and armorValue ~= nil then
                         local armorRatio = math.clamp(armorValue / ROLE_ARMOR_MAX, 0, 1)
-                        local abh = bh * armorRatio
-                        objs.abar.Size = Vector2.new(3, abh)
-                        objs.abar.Position = Vector2.new(bx + bw + 4, by + (bh - abh))
-                        objs.abar.Color = armorColor
+                        local abh = math.max(bh * armorRatio, 2)
+                        objs.abar.Size = UDim2.fromOffset(2, abh)
+                        objs.abar.Position = UDim2.fromOffset(bx + bw + 3, by + (bh - abh))
+                        objs.abar.BackgroundColor3 = armorColor
                         objs.abar.Visible = true
-                        objs.abarOutline.Size = Vector2.new(3, bh)
-                        objs.abarOutline.Position = Vector2.new(bx + bw + 4, by)
+
+                        objs.abarOutline.Size = UDim2.fromOffset(4, bh + 2)
+                        objs.abarOutline.Position = UDim2.fromOffset(bx + bw + 2, by - 1)
                         objs.abarOutline.Visible = true
                     else
                         if objs.abar then objs.abar.Visible = false end
@@ -5064,10 +5095,18 @@ do
                     if objs.abarOutline then objs.abarOutline.Visible = false end
                 end
 
-                if getRoleToggle(role, 'Tracers', false) and rootOnScreen then
-                    objs.tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-                    objs.tracer.To = Vector2.new(rootSP.X, rootSP.Y)
-                    objs.tracer.Color = tracersColor
+                if getRoleToggle(role, 'Tracers', false) and (rootOnScreen or nameOnScreen or (rootSP and rootSP.Z > 0)) then
+                    local vp = Camera.ViewportSize
+                    local from = Vector2.new(vp.X / 2, vp.Y)
+                    local to = Vector2.new(rootSP.X, rootSP.Y)
+                    local diff = to - from
+                    local dist = diff.Magnitude
+                    local angle = math.deg(math.atan2(diff.Y, diff.X))
+
+                    objs.tracer.Size = UDim2.fromOffset(dist, 1.5)
+                    objs.tracer.Position = UDim2.fromOffset(from.X, from.Y)
+                    objs.tracer.Rotation = angle
+                    objs.tracer.BackgroundColor3 = tracersColor
                     objs.tracer.Visible = true
                 else
                     if objs.tracer then objs.tracer.Visible = false end
@@ -5078,6 +5117,7 @@ do
                 for _, pl in ipairs(Players:GetPlayers()) do
                     if pl ~= LocalPlayer then
                         clearESPForPlayer(pl)
+                        clearRoleESPForPlayer(pl)
                         if getToggle('ESPEnabled', false) then
                             createRoleESPForPlayer(pl)
                         end
@@ -6286,7 +6326,7 @@ do
     ensureToggle('RoleESPEnabled', false)
     ensureToggle('RoleESPShowTarget', true)
     ensureToggle('RoleESPShowFriend', true)
-    ensureToggle('RoleESPShowNeutral', false)
+    ensureToggle('RoleESPShowNeutral', true)
     ensureToggle('RoleESPShowNames', true)
     ensureToggle('RoleESPShowBox', true)
     ensureToggle('RoleESPShowTracers', false)
@@ -6325,7 +6365,7 @@ do
             Color = ensureOption('RoleESPFriendColor', Color3.fromRGB(70, 255, 130)),
         },
         Neutral = {
-            Enabled = ensureToggle('RoleESPNeutralEnabled', false),
+            Enabled = ensureToggle('RoleESPNeutralEnabled', true),
             Names = ensureToggle('RoleESPNeutralNames', true),
             NamesColor = ensureOption('RoleESPNeutralNamesColor', Color3.fromRGB(200, 200, 210)),
             Box = ensureToggle('RoleESPNeutralBox', true),
@@ -6387,7 +6427,7 @@ do
     ensureOption('RoleESPColorTarget', Color3.fromRGB(255, 70, 70))
     ensureOption('RoleESPColorFriend', Color3.fromRGB(70, 255, 130))
     ensureOption('RoleESPColorNeutral', Color3.fromRGB(200, 200, 210))
-    State.RoleESPGroup = ensureOption('RoleESPGroup', 'Target')
+    State.RoleESPGroup = ensureOption('RoleESPGroup', 'Neutral')
     ensureOption('RoleManagerPlayer', '')
     ensureOption('RoleManagerRole', 'Neutral')
     State.SelectedCrewTargets = ensureOption('SelectedCrewTargets', {})
@@ -6409,6 +6449,8 @@ do
         HitboxJitter = ensureOption('AimLockHitboxJitter', 25),
         TargetSwitchDelay = ensureOption('AimLockTargetSwitchDelay', 0.1),
         TargetOnly = ensureToggle('AimLockTargetOnly', false),
+        AutoShot = ensureToggle('AimLockAutoShot', false),
+        AutoShotDelay = ensureOption('AimLockAutoShotDelay', 0),
         MissEnabled = ensureToggle('AimLockMissEnabled', false),
         MissPercent = ensureOption('AimLockMissPercent', 0),
         MissRevolverShots = ensureOption('AimLockMissRevolverShots', 3),
@@ -6426,15 +6468,23 @@ do
     State.InstaKey = ensureKeybind('InstaMacroKey', Enum.KeyCode.Insert, 'Hold', false)
     State.MenuKey = ensureKeybind('MenuKeybind', Enum.KeyCode.End, 'Hold', false)
     State.AimLock.Key = ensureKeybind('AimLockKey', Enum.UserInputType.MouseButton2, 'Hold', true)
+    State.AimLock.AutoShotKey = ensureKeybind('AimLockAutoShotKey', Enum.KeyCode.E, 'Hold', true)
     State.Backtrack = {
         Enabled = ensureToggle('BacktrackEnabled', false),
         TargetOnly = ensureToggle('BacktrackTargetOnly', false),
         ShowGhosts = ensureToggle('BacktrackShowGhosts', true),
         Delay = ensureOption('BacktrackDelay', 200),
-        SilentChance = ensureOption('BacktrackSilentChance', 0),
-        TriggerChance = ensureOption('BacktrackTriggerChance', 0),
+        Chance = ensureOption('BacktrackChance', 100),
+        SilentChance = ensureOption('BacktrackSilentChance', 100),
+        TriggerChance = ensureOption('BacktrackTriggerChance', 100),
         Color = ensureOption('BacktrackColor', Color3.fromRGB(0, 220, 255)),
     }
+    if State.Backtrack.Chance and type(State.Backtrack.Chance.OnChanged) == 'function' then
+        State.Backtrack.Chance:OnChanged(function(v)
+            if State.Backtrack.SilentChance then State.Backtrack.SilentChance.Value = v end
+            if State.Backtrack.TriggerChance then State.Backtrack.TriggerChance.Value = v end
+        end)
+    end
     State.Backtrack.Key = ensureKeybind('BacktrackKey', Enum.KeyCode.Q, 'Toggle', true)
     for key, optionId in pairs(themeOptionIds) do
         State[optionId] = ensureOption(optionId, themeDefaults[key])
@@ -7040,6 +7090,7 @@ do
     createKeybindListRow('AutoShot', State.AutoShotKey, State.ShowAutoShotInKeybinds)
     createKeybindListRow('AutoSort', State.InventoryAutoSortKey, State.ShowAutoSortInKeybinds)
     createKeybindListRow('pSilent', State.AimLock.Key, State.ShowAimLockInKeybinds)
+    createKeybindListRow('Silent Auto-Shot', State.AimLock.AutoShotKey, State.ShowAimLockInKeybinds)
     createKeybindListRow('Backtrack', State.Backtrack.Key, State.ShowBacktrackInKeybinds)
 
     local function keybindIsActive(optionObj)
@@ -11804,6 +11855,9 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         createSlider(aimlockSection, 'Target Switch Delay', State.AimLock.TargetSwitchDelay, 0.1, 2, 0.1, ' s')
         createToggle(aimlockSection, 'Show FOV Circle', State.AimLock.ShowFOV)
         createColorRow(aimlockSection, 'FOV Circle Color', State.AimLock.FOVColor)
+        createToggle(aimlockSection, 'Enable Auto-Shot', State.AimLock.AutoShot, 'Automatically shoots closest target in FOV')
+        createKeybindRow(aimlockSection, 'Auto-Shot Keybind', State.AimLock.AutoShotKey)
+        createSlider(aimlockSection, 'Auto-Shot Delay (ms)', State.AimLock.AutoShotDelay, 0, 500, 10, ' ms')
         local missRow = createToggle(aimlockSection, 'Enable Miss Chance', State.AimLock.MissEnabled)
         local missSlider = createSlider(aimlockSection, 'Miss Chance (%)', State.AimLock.MissPercent, 0, 100, 1, '%')
         local missShotsBtn = createButton(aimlockSection, 'Miss Shots Settings', function()
@@ -11853,36 +11907,20 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         createKeybindRow(btSection, 'Backtrack Keybind', State.Backtrack.Key)
 
         local btSilentSection = createSection(pages.Backtrack, 'Silent / Trigger')
-        createSlider(btSilentSection, 'Silent Ghost Chance (%)', State.Backtrack.SilentChance, 0, 100, 1, '%')
+        createSlider(btSilentSection, 'Backtrack Chance (%)', State.Backtrack.Chance, 0, 100, 1, '%')
         do
-            local hint1 = Instance.new('TextLabel')
-            hint1.BackgroundTransparency = 1
-            hint1.Size = UDim2.new(1, 0, 0, 32)
-            hint1.Font = fonts.body
-            hint1.TextColor3 = palette.textDim
-            hint1.TextSize = 10
-            hint1.TextXAlignment = Enum.TextXAlignment.Left
-            hint1.TextYAlignment = Enum.TextYAlignment.Top
-            hint1.TextWrapped = true
-            hint1.Text = 'Вероятность перенаправления выстрела на зафиксированную прошлую позицию врага.'
-            hint1.Parent = btSilentSection
-            bindTheme(hint1, 'TextColor3', 'textDim')
-        end
-
-        createSlider(btSilentSection, 'Trigger Ghost Chance (%)', State.Backtrack.TriggerChance, 0, 100, 1, '%')
-        do
-            local hint2 = Instance.new('TextLabel')
-            hint2.BackgroundTransparency = 1
-            hint2.Size = UDim2.new(1, 0, 0, 32)
-            hint2.Font = fonts.body
-            hint2.TextColor3 = palette.textDim
-            hint2.TextSize = 10
-            hint2.TextXAlignment = Enum.TextXAlignment.Left
-            hint2.TextYAlignment = Enum.TextYAlignment.Top
-            hint2.TextWrapped = true
-            hint2.Text = 'Вероятность срабатывания триггербота при наведении прицела на прошлую позицию врага.'
-            hint2.Parent = btSilentSection
-            bindTheme(hint2, 'TextColor3', 'textDim')
+            local hint = Instance.new('TextLabel')
+            hint.BackgroundTransparency = 1
+            hint.Size = UDim2.new(1, 0, 0, 32)
+            hint.Font = fonts.body
+            hint.TextColor3 = palette.textDim
+            hint.TextSize = 10
+            hint.TextXAlignment = Enum.TextXAlignment.Left
+            hint.TextYAlignment = Enum.TextYAlignment.Top
+            hint.TextWrapped = true
+            hint.Text = 'Вероятность срабатывания выстрелов по бэктреку (работает для Silent Aim и Triggerbot).'
+            hint.Parent = btSilentSection
+            bindTheme(hint, 'TextColor3', 'textDim')
         end
     end)()
 
@@ -15148,16 +15186,17 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             return aimPos - horiz * lookback
         end
 
-        local function IsAimKeyActive()
+        local function isKeybindActive(bindOption)
+            if not bindOption then return false end
             local ok, state = pcall(function()
-                if AimLock.Key and type(AimLock.Key.GetState) == 'function' then
-                    return AimLock.Key:GetState()
+                if type(bindOption.GetState) == 'function' then
+                    return bindOption:GetState()
                 end
-                return false
+                return nil
             end)
-            if ok and state then return true end
+            if ok and state ~= nil then return state == true end
 
-            local keyVal = AimLock.Key and AimLock.Key.Value
+            local keyVal = bindOption.Value
             if type(keyVal) == 'table' then
                 local mode = keyVal.Mode or keyVal[2]
                 if type(mode) == 'string' and string.lower(mode) == 'always' then
@@ -15195,8 +15234,19 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             return isPressed(keyVal)
         end
 
+        local function IsAimKeyActive()
+            return isKeybindActive(AimLock.Key)
+        end
+
+        local function isSilentAutoShotActive()
+            if AimLock.Enabled.Value ~= true then return false end
+            if not (AimLock.AutoShot and AimLock.AutoShot.Value == true) then return false end
+            return isKeybindActive(AimLock.AutoShotKey)
+        end
+
         local function isAimFovActive()
-            return AimLock.Enabled.Value == true and IsAimKeyActive()
+            if AimLock.Enabled.Value ~= true then return false end
+            return IsAimKeyActive() or isSilentAutoShotActive()
         end
 
         local function getEquippedWeaponName()
@@ -15442,9 +15492,15 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 return 0
             end
             local fov = math.clamp(tonumber(fovDeg) or 5, 0.1, 179)
-            local halfScreen = camera.ViewportSize.Y * 0.5
-            local camFov = math.rad(math.max(camera.FieldOfView, 1))
-            return math.tan(math.rad(fov) * 0.5) / math.tan(camFov * 0.5) * halfScreen
+            local vpY = camera.ViewportSize and camera.ViewportSize.Y
+            if not vpY or vpY <= 0 then vpY = 600 end
+            local halfScreen = vpY * 0.5
+            local camFov = math.rad(math.max(camera.FieldOfView or 70, 1))
+            local r = math.tan(math.rad(fov) * 0.5) / math.tan(camFov * 0.5) * halfScreen
+            if r ~= r or r <= 0 then
+                return (tonumber(fovDeg) or 30) * 4
+            end
+            return r
         end
 
         -- Screen-space FOV gate matching the drawn FOV circle around the crosshair.
@@ -16167,29 +16223,62 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         PSilentApi.syncFireEffect = syncFireEffect
         PSilentApi.hitAlongPellet = hitAlongPellet
         PSilentApi.isAimFovActive = isAimFovActive
+        PSilentApi.isSilentAutoShotActive = isSilentAutoShotActive
 
-        if AimLock.FOVCircle then
-            pcall(function() AimLock.FOVCircle:Remove() end)
-            AimLock.FOVCircle = nil
+        local fovGui = nil
+        local fovFrame = nil
+        local fovStroke = nil
+
+        local function ensureFOVCircleGui()
+            if not fovGui or not fovGui.Parent then
+                local parent = (gethui and gethui()) or game:GetService('CoreGui')
+                fovGui = Instance.new('ScreenGui')
+                fovGui.Name = 'SilentAimFOVCircle'
+                fovGui.IgnoreGuiInset = true
+                fovGui.ResetOnSpawn = false
+                fovGui.DisplayOrder = 9999
+                fovGui.Parent = parent
+
+                fovFrame = Instance.new('Frame')
+                fovFrame.Name = 'Circle'
+                fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+                fovFrame.BackgroundTransparency = 1
+                fovFrame.BorderSizePixel = 0
+                fovFrame.Visible = false
+                fovFrame.Parent = fovGui
+
+                local corner = Instance.new('UICorner')
+                corner.CornerRadius = UDim.new(1, 0)
+                corner.Parent = fovFrame
+
+                fovStroke = Instance.new('UIStroke')
+                fovStroke.Thickness = 1.5
+                fovStroke.Color = Color3.fromRGB(255, 255, 255)
+                fovStroke.Parent = fovFrame
+
+                AimLock.FOVCircleGui = fovGui
+                AimLock.FOVCircleFrame = fovFrame
+                AimLock.FOVCircleStroke = fovStroke
+            end
         end
-        AimLock.FOVCircle = Drawing.new('Circle')
-        AimLock.FOVCircle.Visible = false
-        AimLock.FOVCircle.Thickness = 1
-        AimLock.FOVCircle.Filled = false
-        AimLock.FOVCircle.NumSides = 64
 
         local function UpdateFOVCircle()
-            if not AimLock.FOVCircle then
-                return
-            end
-            if AimLock.ShowFOV.Value and AimLock.Enabled.Value then
+            ensureFOVCircleGui()
+            local showCircle = (AimLock.ShowFOV and AimLock.ShowFOV.Value == true) and not (State and State.PanicMode)
+            if showCircle then
                 local center = UserInputService:GetMouseLocation()
-                AimLock.FOVCircle.Position = center
-                AimLock.FOVCircle.Radius = degreesToScreenRadius(AimLock.FOV.Value)
-                AimLock.FOVCircle.Color = AimLock.FOVColor.Value
-                AimLock.FOVCircle.Visible = true
+                local radius = degreesToScreenRadius(AimLock.FOV and AimLock.FOV.Value or 30)
+                local col = (AimLock.FOVColor and typeof(AimLock.FOVColor.Value) == 'Color3') and AimLock.FOVColor.Value or Color3.fromRGB(255, 255, 255)
+                local d = math.max(2, math.floor(radius * 2 + 0.5))
+
+                fovFrame.Position = UDim2.fromOffset(center.X, center.Y)
+                fovFrame.Size = UDim2.fromOffset(d, d)
+                fovStroke.Color = col
+                fovFrame.Visible = true
             else
-                AimLock.FOVCircle.Visible = false
+                if fovFrame then
+                    fovFrame.Visible = false
+                end
             end
         end
 
@@ -16283,6 +16372,123 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
 
         setupGetAimHook()
 
+        local lastAutoShotAt = 0
+
+        local function getMuzzleOrigin()
+            local char = LocalPlayer and LocalPlayer.Character
+            if not char then
+                return camera and camera.CFrame.Position or nil
+            end
+            local tool = char:FindFirstChildOfClass('Tool')
+            if tool then
+                local handle = tool:FindFirstChild('Handle')
+                if tool:FindFirstChild('Default') then
+                    local mesh = tool.Default:FindFirstChild('Mesh')
+                    local def = mesh and mesh:FindFirstChild('Default')
+                    local muzzle = def and def:FindFirstChild('Muzzle')
+                    if muzzle then
+                        return muzzle.WorldPosition
+                    end
+                end
+                if handle then
+                    local muzzle = handle:FindFirstChild('Muzzle')
+                    if muzzle then
+                        return muzzle.WorldPosition
+                    end
+                    return (handle.CFrame * CFrame.new(-1, 0.4, 0)).Position
+                end
+            end
+            local head = char:FindFirstChild('Head')
+            if head and head:IsA('BasePart') then
+                return head.Position
+            end
+            local hrp = char:FindFirstChild('HumanoidRootPart')
+            if hrp and hrp:IsA('BasePart') then
+                return hrp.Position
+            end
+            return camera and camera.CFrame.Position or nil
+        end
+
+        local function triggerWeaponShot(tool)
+            pcall(function()
+                if tool and type(tool.Activate) == 'function' then
+                    tool:Activate()
+                end
+            end)
+            pcall(function()
+                if type(mouse1click) == 'function' then
+                    mouse1click()
+                elseif type(mouse1press) == 'function' and type(mouse1release) == 'function' then
+                    mouse1press()
+                    task.delay(0.01, function()
+                        pcall(mouse1release)
+                    end)
+                elseif VirtualInputManager and type(VirtualInputManager.SendMouseButtonEvent) == 'function' then
+                    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.delay(0.01, function()
+                        pcall(function()
+                            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                        end)
+                    end)
+                end
+            end)
+        end
+
+        local function stepSilentAutoShot()
+            if not isSilentAutoShotActive() then
+                return
+            end
+
+            local char = LocalPlayer and LocalPlayer.Character
+            if not char then
+                return
+            end
+            local hum = char:FindFirstChildOfClass('Humanoid')
+            if not hum or hum.Health <= 0 then
+                return
+            end
+
+            local tool = char:FindFirstChildOfClass('Tool')
+            if not tool then
+                return
+            end
+
+            local ammo = tool:FindFirstChild('Ammo')
+            local shooting = tool:FindFirstChild('Shooting')
+            local isGun = (ammo ~= nil) or (shooting ~= nil) or (originalRanges[tool.Name] ~= nil)
+            if not isGun then
+                return
+            end
+
+            if ammo and ammo.Value <= 0 then
+                return
+            end
+            if shooting and shooting.Value == true then
+                return
+            end
+
+            local now = os.clock()
+            local delayMs = tonumber(AimLock.AutoShotDelay and AimLock.AutoShotDelay.Value) or 0
+            local delaySec = math.max(0, delayMs) / 1000
+            local minInterval = math.max(delaySec, 0.03)
+            if (now - lastAutoShotAt) < minInterval then
+                return
+            end
+
+            local origin = getMuzzleOrigin()
+            if not origin then
+                return
+            end
+
+            local target = resolveSilentTarget(origin)
+            if not target then
+                return
+            end
+
+            lastAutoShotAt = now
+            triggerWeaponShot(tool)
+        end
+
         if AimLock.Connection then
             AimLock.Connection:Disconnect()
         end
@@ -16299,11 +16505,12 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                     BacktrackApi.clearPending()
                 end
             end
-            if AimLock.Enabled.Value == true and AimLock.ShowFOV.Value == true then
+            if AimLock.ShowFOV and AimLock.ShowFOV.Value == true then
                 UpdateFOVCircle()
-            elseif AimLock.FOVCircle and AimLock.FOVCircle.Visible then
-                AimLock.FOVCircle.Visible = false
+            elseif fovFrame and fovFrame.Visible then
+                fovFrame.Visible = false
             end
+            stepSilentAutoShot()
         end)
 
         Library:OnUnload(function()
@@ -16315,9 +16522,13 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 pcall(function() AimLock.Connection:Disconnect() end)
                 AimLock.Connection = nil
             end
-            if AimLock.FOVCircle then
-                pcall(function() AimLock.FOVCircle:Remove() end)
-                AimLock.FOVCircle = nil
+            if fovGui then
+                pcall(function() fovGui:Destroy() end)
+                fovGui = nil
+            end
+            if AimLock.FOVCircleGui then
+                pcall(function() AimLock.FOVCircleGui:Destroy() end)
+                AimLock.FOVCircleGui = nil
             end
             if hooked and oldGetAim then
                 pcall(function()
@@ -17607,7 +17818,12 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
             return plr, resolveLivePart(hrp), hit
         end
 
-        -- Описание: Рассчитывает процентную вероятность (Silent Ghost Chance) использования фантома для Silent Aim
+        local function getBacktrackChance()
+            local chanceObj = (BT and BT.Chance) or (BT and BT.SilentChance) or (BT and BT.TriggerChance)
+            return math.clamp(tonumber(chanceObj and chanceObj.Value) or 0, 0, 100)
+        end
+
+        -- Описание: Рассчитывает процентную вероятность использования фантома для Silent Aim
         local function peekUseGhost()
             if pendingUseGhost ~= nil then
                 return pendingUseGhost
@@ -17616,23 +17832,30 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
                 pendingUseGhost = false
                 return false
             end
-            local chance = math.clamp(tonumber(BT.SilentChance and BT.SilentChance.Value) or 0, 0, 100)
+            local chance = getBacktrackChance()
             if chance <= 0 then
                 pendingUseGhost = false
                 return false
+            end
+            if chance >= 100 then
+                pendingUseGhost = true
+                return true
             end
             pendingUseGhost = math.random(1, 100) <= chance
             return pendingUseGhost
         end
 
-        -- Описание: Отдельный расчёт процента вероятности (Trigger Ghost Chance) использования фантома для Triggerbot
+        -- Описание: Расчёт процента вероятности использования фантома для Triggerbot
         local function peekTriggerUseGhost()
             if not isActive() then
                 return false
             end
-            local chance = math.clamp(tonumber(BT.TriggerChance and BT.TriggerChance.Value) or 0, 0, 100)
+            local chance = getBacktrackChance()
             if chance <= 0 then
                 return false
+            end
+            if chance >= 100 then
+                return true
             end
             return math.random(1, 100) <= chance
         end
