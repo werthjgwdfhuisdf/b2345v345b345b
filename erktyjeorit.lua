@@ -7127,15 +7127,30 @@ do
     local function setKeybindWindowVisible()
         if isInitialLoaderActive then
             keybindWindow.Visible = false
+            if keybindScreen then
+                keybindScreen.Enabled = false
+            end
             return
         end
-        local show = State.ShowKeybindsList.Value == true
+        local show = State.ShowKeybindsList and State.ShowKeybindsList.Value == true
+        if keybindScreen then
+            keybindScreen.Enabled = show
+        end
         if show then
             keybindWindow.Visible = true
             keybindGroup.BackgroundTransparency = 1
+            if type(applyOverlayPanelPositions) == 'function' then
+                applyOverlayPanelPositions()
+            end
+            refreshKeybindWindow()
         else
             runLater(0.15, function()
-                keybindWindow.Visible = false
+                if not (State.ShowKeybindsList and State.ShowKeybindsList.Value == true) then
+                    keybindWindow.Visible = false
+                    if keybindScreen then
+                        keybindScreen.Enabled = false
+                    end
+                end
             end)
         end
     end
@@ -7146,6 +7161,20 @@ do
     attachChangeListener(State.ShowAimLockInKeybinds, refreshKeybindWindow)
     attachChangeListener(State.ShowBacktrackInKeybinds, refreshKeybindWindow)
     attachChangeListener(State.ShowKeybindsList, setKeybindWindowVisible)
+    if State.KeybindsPanelX then
+        attachChangeListener(State.KeybindsPanelX, function()
+            if type(applyOverlayPanelPositions) == 'function' then
+                applyOverlayPanelPositions()
+            end
+        end)
+    end
+    if State.KeybindsPanelY then
+        attachChangeListener(State.KeybindsPanelY, function()
+            if type(applyOverlayPanelPositions) == 'function' then
+                applyOverlayPanelPositions()
+            end
+        end)
+    end
     setKeybindWindowVisible()
     refreshKeybindWindow()
     registerThemeRefresher(refreshKeybindWindow)
@@ -11744,6 +11773,21 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             end
         end
 
+        pcall(function()
+            if type(applyOverlayPanelPositions) == 'function' then
+                applyOverlayPanelPositions()
+            end
+            if type(setKeybindWindowVisible) == 'function' then
+                setKeybindWindowVisible()
+            end
+            if type(refreshKeybindWindow) == 'function' then
+                refreshKeybindWindow()
+            end
+            if type(syncWmVisibility) == 'function' then
+                syncWmVisibility()
+            end
+        end)
+
         return true
     end
 
@@ -15416,37 +15460,69 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 return false
             end
             local toTarget = aimPos - origin
-            local dist = toTarget.Magnitude
-            if dist < 1e-4 then
+            if toTarget.Magnitude < 1e-4 then
                 return true
             end
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.IgnoreWater = true
+
+            camera = Workspace.CurrentCamera or camera
+            local camPos = camera and camera.CFrame.Position
+            local localChar = LocalPlayer.Character
+            local headPos = localChar and localChar:FindFirstChild('Head') and localChar.Head.Position
+
             local ignore = {}
-            if LocalPlayer.Character then
-                ignore[#ignore + 1] = LocalPlayer.Character
+            if localChar then
+                ignore[#ignore + 1] = localChar
             end
             local ghostFolder = Workspace:FindFirstChild('BacktrackGhosts')
             if ghostFolder then
                 ignore[#ignore + 1] = ghostFolder
             end
+
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.IgnoreWater = true
             params.FilterDescendantsInstances = ignore
-            local result = Workspace:Raycast(origin, toTarget, params)
-            if not result or not result.Instance then
-                return true
+
+            local function checkRay(startPos, endPos)
+                local dir = endPos - startPos
+                if dir.Magnitude < 1e-4 then
+                    return true
+                end
+                local result = Workspace:Raycast(startPos, dir, params)
+                if not result or not result.Instance then
+                    return true
+                end
+                local hit = result.Instance
+                local char = plr.Character
+                local playersFolder = Workspace:FindFirstChild('Players')
+                local wsChar = playersFolder and playersFolder:FindFirstChild(plr.Name)
+                if char and hit:IsDescendantOf(char) then
+                    return true
+                end
+                if wsChar and hit:IsDescendantOf(wsChar) then
+                    return true
+                end
+                return false
             end
-            local hit = result.Instance
-            local char = plr.Character
-            if char and hit:IsDescendantOf(char) then
-                return true
+
+            -- 1. Check weapon origin
+            if not checkRay(origin, aimPos) then
+                return false
             end
-            local playersFolder = Workspace:FindFirstChild('Players')
-            local wsChar = playersFolder and playersFolder:FindFirstChild(plr.Name)
-            if wsChar and hit:IsDescendantOf(wsChar) then
-                return true
+            -- 2. Check camera origin
+            if camPos and (camPos - origin).Magnitude > 0.5 then
+                if not checkRay(camPos, aimPos) then
+                    return false
+                end
             end
-            return false
+            -- 3. Check character head origin
+            if headPos and (headPos - origin).Magnitude > 0.5 then
+                if not checkRay(headPos, aimPos) then
+                    return false
+                end
+            end
+
+            return true
         end
 
         local function isSilentTargetAlive(plr)
@@ -15570,9 +15646,12 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 return nil, nil
             end
 
+            if not isAimPointVisible(origin, scorePos, plr) then
+                return nil, nil
+            end
             if not relaxed then
                 local _, inFov = screenFovDist(scorePos, crosshair, fovPx)
-                if not inFov or not isAimPointVisible(origin, scorePos, plr) then
+                if not inFov then
                     return nil, nil
                 end
             end
@@ -15584,30 +15663,57 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                     closest = closestPointOnPartToRay(aimHrp, rayOrigin, rayDir) or closest
                 end
                 closest = closest or closestPointOnPartOBB(aimHrp, aimHrp.Position) or aimHrp.Position
-                if relaxed then
-                    aimPos = closest
+                local jittered = jitterPointInsideOBB(aimHrp, closest, jitterPct)
+                local _, jitterInFov = screenFovDist(jittered, crosshair, fovPx)
+                if jitterInFov and isAimPointVisible(origin, jittered, plr) then
+                    aimPos = jittered
+                elseif isAimPointVisible(origin, closest, plr) then
+                    local _, closestInFov = screenFovDist(closest, crosshair, fovPx)
+                    aimPos = closestInFov and closest or scorePos
                 else
-                    local jittered = jitterPointInsideOBB(aimHrp, closest, jitterPct)
-                    local _, jitterInFov = screenFovDist(jittered, crosshair, fovPx)
-                    if jitterInFov and isAimPointVisible(origin, jittered, plr) then
-                        aimPos = jittered
-                    elseif isAimPointVisible(origin, closest, plr) then
-                        local _, closestInFov = screenFovDist(closest, crosshair, fovPx)
-                        aimPos = closestInFov and closest or scorePos
-                    else
-                        aimPos = scorePos
-                    end
+                    aimPos = scorePos
                 end
-            elseif relaxed and aimPart then
+            elseif aimPart then
                 aimPos = aimPart.Position
             end
-            aimPos = applySpeedLagAim(aimPos, plr, weaponName)
+
+            if not isAimPointVisible(origin, aimPos, plr) then
+                if isAimPointVisible(origin, scorePos, plr) then
+                    aimPos = scorePos
+                else
+                    return nil, nil
+                end
+            end
+
+            local lagAim = applySpeedLagAim(aimPos, plr, weaponName)
+            if lagAim and isAimPointVisible(origin, lagAim, plr) then
+                aimPos = lagAim
+            end
+
+            if not isAimPointVisible(origin, aimPos, plr) then
+                return nil, nil
+            end
             return aimPos, aimHrp
         end
 
+        local CANDIDATE_PARTS = {
+            'Head',
+            'UpperTorso',
+            'Torso',
+            'HumanoidRootPart',
+            'LowerTorso',
+            'RightUpperArm',
+            'LeftUpperArm',
+            'Right Arm',
+            'Left Arm',
+            'RightUpperLeg',
+            'LeftUpperLeg',
+            'Right Leg',
+            'Left Leg',
+        }
+
         local function findTarget(origin, fov)
-            -- Stefanuk-style: pick player by min 2D screen distance to crosshair inside FOV circle,
-            -- then compute aim point (Closest Hitbox uses OBB closest + jitter only after winner).
+            -- Pick the player whose visible hitbox/point is physically closest to the crosshair in 2D screen space
             local bestScreenDist, bestPlr = math.huge, nil
             camera = Workspace.CurrentCamera or camera
             if not camera or typeof(origin) ~= 'Vector3' then
@@ -15633,36 +15739,41 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                     continue
                 end
 
-                local scorePos = nil
+                local plrBestDist = math.huge
+
                 if aimMode == 'Closest Hitbox' then
-                    local hrp = char:FindFirstChild('HumanoidRootPart')
-                    if not hrp or not hrp:IsA('BasePart') then
-                        continue
-                    end
-                    scorePos = hrp.Position
-                    if rayOrigin and rayDir then
-                        scorePos = closestPointOnPartToRay(hrp, rayOrigin, rayDir) or scorePos
+                    for _, pName in ipairs(CANDIDATE_PARTS) do
+                        local part = char:FindFirstChild(pName)
+                        if part and part:IsA('BasePart') then
+                            local pt = part.Position
+                            if rayOrigin and rayDir then
+                                pt = closestPointOnPartToRay(part, rayOrigin, rayDir) or pt
+                            end
+                            if (pt - origin).Magnitude <= maxDist then
+                                local screenDist, inFov = screenFovDist(pt, crosshair, fovPx)
+                                if inFov and screenDist and screenDist < plrBestDist then
+                                    if isAimPointVisible(origin, pt, plr) then
+                                        plrBestDist = screenDist
+                                    end
+                                end
+                            end
+                        end
                     end
                 else
                     local part = resolveBodyPart(char, bodyPartName)
-                    if not part then
-                        continue
+                    if part and part:IsA('BasePart') then
+                        local pt = part.Position
+                        if (pt - origin).Magnitude <= maxDist then
+                            local screenDist, inFov = screenFovDist(pt, crosshair, fovPx)
+                            if inFov and screenDist and isAimPointVisible(origin, pt, plr) then
+                                plrBestDist = screenDist
+                            end
+                        end
                     end
-                    scorePos = part.Position
                 end
 
-                if (scorePos - origin).Magnitude > maxDist then
-                    continue
-                end
-                local screenDist, inFov = screenFovDist(scorePos, crosshair, fovPx)
-                if not inFov then
-                    continue
-                end
-                if not isAimPointVisible(origin, scorePos, plr) then
-                    continue
-                end
-                if screenDist < bestScreenDist then
-                    bestScreenDist = screenDist
+                if plrBestDist < bestScreenDist then
+                    bestScreenDist = plrBestDist
                     bestPlr = plr
                 end
             end
@@ -15685,13 +15796,30 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 end
                 return nil
             end
-            -- Dedup getAim + packFire in the same shot (one jitter sample). Never cache a miss.
+            -- Dedup getAim + packFire in the same shot (one jitter sample). Never cache a miss or occluded target.
             local now = os.clock()
             if lastSilentTarget and (now - lastResolveClock) < 0.04 then
-                return lastSilentTarget
+                if isAimPointVisible(origin, lastSilentTarget, lastSilentPlayer) then
+                    return lastSilentTarget
+                else
+                    clearSilentCache()
+                end
             end
             local fov = tonumber(AimLock.FOV.Value) or 5
+            local fovPx = degreesToScreenRadius(fov)
+            local crosshair = UserInputService:GetMouseLocation()
 
+            -- 1. Find live player closest to crosshair inside FOV circle
+            local closestAim, closestHrp, closestPlr = findTarget(origin, fov)
+            local closestDist = math.huge
+            if closestAim then
+                local d = screenFovDist(closestAim, crosshair, fovPx)
+                if d then
+                    closestDist = d
+                end
+            end
+
+            -- 2. Check Backtrack ghost (only if visible and closer than live target)
             local ghostAim, ghostHrp, ghostPlr = nil, nil, nil
             pcall(function()
                 if not (BacktrackApi and BacktrackApi.isActive and BacktrackApi.isActive()) then
@@ -15703,13 +15831,18 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 if type(BacktrackApi.pickGhostInFov) ~= 'function' then
                     return
                 end
-                local fovPx = degreesToScreenRadius(fov)
-                local crosshair = UserInputService:GetMouseLocation()
                 local function inFov(pos)
                     return screenFovDist(pos, crosshair, fovPx)
                 end
-                ghostAim, ghostHrp, ghostPlr = BacktrackApi.pickGhostInFov(origin, inFov)
+                local gAim, gHrp, gPlr = BacktrackApi.pickGhostInFov(origin, inFov)
+                if gAim and gPlr and isAimPointVisible(origin, gAim, gPlr) then
+                    local gDist = screenFovDist(gAim, crosshair, fovPx)
+                    if gDist and (not closestAim or gDist < closestDist) then
+                        ghostAim, ghostHrp, ghostPlr = gAim, gHrp, gPlr
+                    end
+                end
             end)
+
             if ghostAim and ghostPlr then
                 lockedPlayer = ghostPlr
                 lockClock = now
@@ -15720,62 +15853,10 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 lastResolveClock = now
                 return ghostAim
             end
-            local delay = math.clamp(tonumber(AimLock.TargetSwitchDelay and AimLock.TargetSwitchDelay.Value) or 0.1, 0.1, 2)
-            local closestAim, closestHrp, closestPlr = findTarget(origin, fov)
-
-            -- Hold current lock until switch delay elapses (or locked target becomes invalid).
-            if lockedPlayer and lockedPlayer ~= closestPlr then
-                local lockedAim, lockedHrp = buildAimForPlayer(lockedPlayer, origin, fov, false)
-                if lockedAim and (now - lockClock) < delay then
-                    lastSilentTarget = lockedAim
-                    lastSilentHrp = lockedHrp
-                    lastSilentPlayer = lockedPlayer
-                    lastResolveClock = now
-                    return lockedAim
-                end
-                if not lockedAim then
-                    if isSilentTargetAlive(lockedPlayer) then
-                        -- Brief wall/FOV flicker within switch delay: keep lock with relaxed aim.
-                        if (now - lockClock) < delay then
-                            local relaxedAim, relaxedHrp = buildAimForPlayer(lockedPlayer, origin, fov, true)
-                            if relaxedAim then
-                                lastSilentTarget = relaxedAim
-                                lastSilentHrp = relaxedHrp
-                                lastSilentPlayer = lockedPlayer
-                                lastResolveClock = now
-                                return relaxedAim
-                            end
-                        end
-                        -- Delay elapsed: fall through so a new in-FOV target can acquire
-                        -- (including when you started spraying before they entered FOV).
-                    else
-                        -- KO/death: unlock + Target Switch Delay CD only (no LMB hold gate).
-                        lockedPlayer = nil
-                        lockClock = 0
-                        nextAcquireAt = now + delay
-                        lastSilentTarget = nil
-                        lastSilentHrp = nil
-                        lastSilentPlayer = nil
-                        lastResolveClock = now
-                        return nil
-                    end
-                end
-            end
-
-            -- After KO unlock, wait Target Switch Delay then allow acquire even while LMB held.
-            if now < nextAcquireAt then
-                lastSilentTarget = nil
-                lastSilentHrp = nil
-                lastSilentPlayer = nil
-                lastResolveClock = now
-                return nil
-            end
 
             if closestAim and closestPlr then
-                if lockedPlayer ~= closestPlr then
-                    lockedPlayer = closestPlr
-                    lockClock = now
-                end
+                lockedPlayer = closestPlr
+                lockClock = now
                 nextAcquireAt = 0
                 lastSilentTarget = closestAim
                 lastSilentHrp = closestHrp
@@ -15784,27 +15865,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 return closestAim
             end
 
-            -- No one in FOV: brief relaxed grace only within switch delay, then unlock.
-            -- Infinite out-of-FOV sticky prevented locking the next player mid-spray.
-            if lockedPlayer and isSilentTargetAlive(lockedPlayer) and (now - lockClock) < delay then
-                local relaxedAim, relaxedHrp = buildAimForPlayer(lockedPlayer, origin, fov, true)
-                if relaxedAim then
-                    lastSilentTarget = relaxedAim
-                    lastSilentHrp = relaxedHrp
-                    lastSilentPlayer = lockedPlayer
-                    lastResolveClock = now
-                    return relaxedAim
-                end
-            end
-
-            lockedPlayer = nil
-            lockClock = 0
-            lastSilentTarget = nil
-            lastSilentHrp = nil
-            lastSilentPlayer = nil
-            if now >= nextAcquireAt then
-                nextAcquireAt = 0
-            end
+            clearSilentCache()
             return nil
         end
 
@@ -16482,6 +16543,10 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
 
             local target = resolveSilentTarget(origin)
             if not target then
+                return
+            end
+            if not isAimPointVisible(origin, target, lastSilentPlayer) then
+                clearSilentCache()
                 return
             end
 
@@ -17391,14 +17456,34 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
         setMenuVisible(true)
         task.spawn(function()
             pcall(function()
+                local loaded = false
                 if isfile and isfile(autoLoadFile) and readfile then
                     local nm = tostring(readfile(autoLoadFile) or ''):gsub('%s+$', '')
                     if nm ~= '' and loadConfig then
                         local ok = loadConfig(nm)
-                        if ok and type(showNotification) == 'function' then
-                            showNotification('Settings', 'Auto-loaded config: ' .. nm, 3)
+                        if ok then
+                            loaded = true
+                            if type(showNotification) == 'function' then
+                                showNotification('Settings', 'Auto-loaded config: ' .. nm, 3)
+                            end
                         end
                     end
+                end
+                if not loaded and loadConfig then
+                    if isfile and isfile(getConfigFilePath('default')) then
+                        loadConfig('default')
+                    elseif isfile and isfile(filePath) then
+                        loadConfig('config')
+                    end
+                end
+                if setKeybindWindowVisible then
+                    setKeybindWindowVisible()
+                end
+                if refreshKeybindWindow then
+                    refreshKeybindWindow()
+                end
+                if applyOverlayPanelPositions then
+                    applyOverlayPanelPositions()
                 end
             end)
         end)
