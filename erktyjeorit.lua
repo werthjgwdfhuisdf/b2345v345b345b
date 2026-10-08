@@ -8287,13 +8287,45 @@ do
         return row
     end
 
+    local function getStepDecimals(step)
+        if not step or step >= 1 then
+            return 0
+        end
+        local str = string.format('%.6f', step)
+        str = string.gsub(str, '0+$', '')
+        local dot = string.find(str, '%.')
+        if dot then
+            return #string.sub(str, dot + 1)
+        end
+        return 0
+    end
+
     local function roundStep(value, minValue, maxValue, step)
-        local v = math.clamp(value, minValue, maxValue)
+        local v = math.clamp(tonumber(value) or minValue, minValue, maxValue)
         local s = step or 1
         if s > 0 then
-            v = math.floor((v / s) + 0.5) * s
+            local count = math.floor(((v - minValue) / s) + 0.5)
+            v = minValue + count * s
+            local dec = getStepDecimals(s)
+            if dec > 0 then
+                local mult = 10 ^ dec
+                v = math.floor(v * mult + 0.5) / mult
+            else
+                v = math.floor(v + 0.5)
+            end
         end
         return math.clamp(v, minValue, maxValue)
+    end
+
+    local function formatSliderValue(val, step, suffix)
+        local dec = getStepDecimals(step)
+        local formatted
+        if dec <= 0 then
+            formatted = string.format('%d', math.floor(val + 0.5))
+        else
+            formatted = string.format('%.' .. dec .. 'f', val)
+        end
+        return formatted .. (suffix or '')
     end
 
     createSlider = function(parent, caption, optionObj, minValue, maxValue, step, suffix)
@@ -8308,7 +8340,7 @@ do
         label.Name = 'Label'
         label.BackgroundTransparency = 1
         label.Position = UDim2.new(0, 0, 0, 0)
-        label.Size = UDim2.new(1, -60, 0, 14)
+        label.Size = UDim2.new(1, -95, 0, 14)
         label.Font = Enum.Font.Gotham
         label.TextSize = 12
         label.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -8321,7 +8353,7 @@ do
         valLbl.Name = 'Value'
         valLbl.AnchorPoint = Vector2.new(1, 0)
         valLbl.Position = UDim2.new(1, -26, 0, 0)
-        valLbl.Size = UDim2.new(0, 30, 0, 14)
+        valLbl.Size = UDim2.new(0, 65, 0, 14)
         valLbl.BackgroundTransparency = 1
         valLbl.Font = Enum.Font.Gotham
         valLbl.TextSize = 12
@@ -8397,7 +8429,7 @@ do
             local pct = range > 0 and math.clamp((val - minValue) / range, 0, 1) or 0
             fill.Size = UDim2.new(pct, -2, 1, -2)
             fill.BackgroundColor3 = palette.accent
-            valLbl.Text = tostring(val) .. (suffix or '')
+            valLbl.Text = formatSliderValue(val, step, suffix)
             if not skipSet then
                 optionObj:SetValue(val)
             end
@@ -15134,6 +15166,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         local lastSilentTarget = nil
         local lastSilentHrp = nil
         local lastSilentPlayer = nil
+        local lastSilentPart = nil
         local lastResolveClock = 0
         local lockedPlayer = nil
         local lockClock = 0
@@ -15553,6 +15586,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             lastSilentTarget = nil
             lastSilentHrp = nil
             lastSilentPlayer = nil
+            lastSilentPart = nil
             lockedPlayer = nil
             lockClock = 0
             nextAcquireAt = 0
@@ -15691,9 +15725,9 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             end
 
             if not isAimPointVisible(origin, aimPos, plr) then
-                return nil, nil
+                return nil, nil, nil
             end
-            return aimPos, aimHrp
+            return aimPos, aimHrp, aimPart or aimHrp
         end
 
         local CANDIDATE_PARTS = {
@@ -15717,7 +15751,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             local bestScreenDist, bestPlr = math.huge, nil
             camera = Workspace.CurrentCamera or camera
             if not camera or typeof(origin) ~= 'Vector3' then
-                return nil, nil, nil
+                return nil, nil, nil, nil
             end
             local weaponName = getEquippedWeaponName()
             local maxDist = (weaponName and originalRanges[weaponName]) or 200
@@ -15779,13 +15813,13 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             end
 
             if not bestPlr then
-                return nil, nil, nil
+                return nil, nil, nil, nil
             end
-            local aimPos, aimHrp = buildAimForPlayer(bestPlr, origin, fov, false)
+            local aimPos, aimHrp, aimPart = buildAimForPlayer(bestPlr, origin, fov, false)
             if not aimPos then
-                return nil, nil, nil
+                return nil, nil, nil, nil
             end
-            return aimPos, aimHrp, bestPlr
+            return aimPos, aimHrp, bestPlr, aimPart or aimHrp
         end
 
         local function resolveSilentTarget(origin)
@@ -15810,7 +15844,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             local crosshair = UserInputService:GetMouseLocation()
 
             -- 1. Find live player closest to crosshair inside FOV circle
-            local closestAim, closestHrp, closestPlr = findTarget(origin, fov)
+            local closestAim, closestHrp, closestPlr, closestPart = findTarget(origin, fov)
             local closestDist = math.huge
             if closestAim then
                 local d = screenFovDist(closestAim, crosshair, fovPx)
@@ -15850,6 +15884,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 lastSilentTarget = ghostAim
                 lastSilentHrp = ghostHrp
                 lastSilentPlayer = ghostPlr
+                lastSilentPart = ghostHrp
                 lastResolveClock = now
                 return ghostAim
             end
@@ -15861,6 +15896,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 lastSilentTarget = closestAim
                 lastSilentHrp = closestHrp
                 lastSilentPlayer = closestPlr
+                lastSilentPart = closestPart or closestHrp
                 lastResolveClock = now
                 return closestAim
             end
@@ -16285,6 +16321,9 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         PSilentApi.hitAlongPellet = hitAlongPellet
         PSilentApi.isAimFovActive = isAimFovActive
         PSilentApi.isSilentAutoShotActive = isSilentAutoShotActive
+        PSilentApi.getLastTarget = function()
+            return lastSilentTarget, lastSilentPart, lastSilentPlayer
+        end
 
         local fovGui = nil
         local fovFrame = nil
@@ -16409,6 +16448,12 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                                     local target = resolveSilentTarget(origin)
                                     if target then
                                         redirectPackEnds(origin, bulletcount, ends, target)
+                                        if type(hits) == 'table' then
+                                            local count = math.max(1, math.floor(tonumber(bulletcount) or 1))
+                                            for i = 1, count do
+                                                hits[i] = target
+                                            end
+                                        end
                                     end
                                 end
                             end
@@ -18146,6 +18191,40 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
                             unpacked.ends,
                             hitInstances
                         )
+
+                        -- Synchronize hitInstances and hits for pSilent shots:
+                        if PSilentApi and type(PSilentApi.isAimFovActive) == 'function' and PSilentApi.isAimFovActive() then
+                            local sTarget, sPart, sPlr = nil, nil, nil
+                            if type(PSilentApi.getLastTarget) == 'function' then
+                                sTarget, sPart, sPlr = PSilentApi.getLastTarget()
+                            end
+                            if sTarget and sPlr and sPlr.Character then
+                                local targetPart = sPart
+                                if not targetPart or not targetPart.Parent or not targetPart:IsDescendantOf(sPlr.Character) then
+                                    targetPart = sPlr.Character:FindFirstChild('Head') or sPlr.Character:FindFirstChild('HumanoidRootPart')
+                                end
+                                if targetPart then
+                                    local count = math.max(1, math.floor(tonumber(unpacked.bulletcount) or 1))
+                                    if type(hitInstances) == 'table' then
+                                        for i = 1, count do
+                                            if hitInstances[i] == nil or not (typeof(hitInstances[i]) == 'Instance' and hitInstances[i]:IsDescendantOf(sPlr.Character)) then
+                                                hitInstances[i] = targetPart
+                                                did = true
+                                            end
+                                        end
+                                    end
+                                    if type(unpacked.hits) == 'table' then
+                                        for i = 1, count do
+                                            if typeof(unpacked.hits[i]) ~= 'Vector3' or (unpacked.hits[i] - sTarget).Magnitude > 25 then
+                                                unpacked.hits[i] = sTarget
+                                                did = true
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
                         local packFn = (PSilentApi and PSilentApi.rawPackFire) or GunNet.packFire
                         if did and type(packFn) == 'function' then
                             packed = packFn(
