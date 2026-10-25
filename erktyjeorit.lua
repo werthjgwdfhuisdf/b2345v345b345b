@@ -6505,7 +6505,7 @@ do
     local header, closeBtn, tabBar, rangePanelBody, body, content, headerBackdrop
     local keybindConnections = {}
     local rangePanelOpen = false
-    local syncRangePanelPosition, setRangePanelVisible, syncSettingsPosition
+    local syncRangePanelPosition, setRangePanelVisible, syncSettingsPosition, setKeybindWindowVisible, refreshKeybindWindow, syncWmVisibility
     local mainTargetSize, mainTargetPos
     local applyOverlayPanelPositions, requestSaveConfig, saveConfig, loadConfig, showNotification
     local listConfigs, deleteConfig, setAutoLoad, clearAutoLoad, listThemes, saveTheme, loadTheme, deleteTheme, saveRoles, loadRoles
@@ -7104,7 +7104,7 @@ do
         return optionObj.__down == true
     end
 
-    local function refreshKeybindWindow()
+    refreshKeybindWindow = function()
         if keybindWindow and keybindWindow.Visible == false then
             return
         end
@@ -7124,7 +7124,7 @@ do
         end
     end
 
-    local function setKeybindWindowVisible()
+    setKeybindWindowVisible = function()
         if isInitialLoaderActive then
             keybindWindow.Visible = false
             if keybindScreen then
@@ -16325,60 +16325,111 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
             return lastSilentTarget, lastSilentPart, lastSilentPlayer
         end
 
+        local fovCircle = nil
         local fovGui = nil
         local fovFrame = nil
         local fovStroke = nil
 
         local function ensureFOVCircleGui()
-            if not fovGui or not fovGui.Parent then
-                local parent = (gethui and gethui()) or game:GetService('CoreGui')
-                fovGui = Instance.new('ScreenGui')
-                fovGui.Name = 'SilentAimFOVCircle'
-                fovGui.IgnoreGuiInset = true
-                fovGui.ResetOnSpawn = false
-                fovGui.DisplayOrder = 9999
-                fovGui.Parent = parent
+            if not fovCircle and type(Drawing) == 'table' and type(Drawing.new) == 'function' then
+                pcall(function()
+                    local d = Drawing.new('Circle')
+                    if d then
+                        d.Visible = false
+                        d.Thickness = 1.5
+                        d.Radius = 30
+                        d.Filled = false
+                        d.Transparency = 1
+                        pcall(function() d.NumSides = 64 end)
+                        pcall(function() d.ZIndex = 9999 end)
+                        fovCircle = d
+                        AimLock.FOVCircle = d
+                    end
+                end)
+            end
 
-                fovFrame = Instance.new('Frame')
-                fovFrame.Name = 'Circle'
-                fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-                fovFrame.BackgroundTransparency = 1
-                fovFrame.BorderSizePixel = 0
-                fovFrame.Visible = false
-                fovFrame.Parent = fovGui
+            if not fovFrame or not fovFrame.Parent or not fovGui or not fovGui.Parent then
+                pcall(function()
+                    local parent = (type(resolveParent) == 'function' and resolveParent())
+                        or (gethui and gethui())
+                        or game:GetService('CoreGui')
+                    if not parent then
+                        local lp = Players.LocalPlayer
+                        parent = lp and lp:FindFirstChildOfClass('PlayerGui')
+                    end
+                    if parent then
+                        if fovGui then
+                            pcall(function() fovGui:Destroy() end)
+                        end
+                        fovGui = Instance.new('ScreenGui')
+                        fovGui.Name = 'AimLock_FOVCircleGui'
+                        fovGui.ResetOnSpawn = false
+                        fovGui.IgnoreGuiInset = true
+                        fovGui.DisplayOrder = 9999
+                        fovGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+                        fovGui.Parent = parent
 
-                local corner = Instance.new('UICorner')
-                corner.CornerRadius = UDim.new(1, 0)
-                corner.Parent = fovFrame
+                        fovFrame = Instance.new('Frame')
+                        fovFrame.Name = 'FOVCircle'
+                        fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+                        fovFrame.BackgroundTransparency = 1
+                        fovFrame.BorderSizePixel = 0
+                        fovFrame.Visible = false
+                        fovFrame.Parent = fovGui
 
-                fovStroke = Instance.new('UIStroke')
-                fovStroke.Thickness = 1.5
-                fovStroke.Color = Color3.fromRGB(255, 255, 255)
-                fovStroke.Parent = fovFrame
+                        local corner = Instance.new('UICorner')
+                        corner.CornerRadius = UDim.new(1, 0)
+                        corner.Parent = fovFrame
 
-                AimLock.FOVCircleGui = fovGui
-                AimLock.FOVCircleFrame = fovFrame
-                AimLock.FOVCircleStroke = fovStroke
+                        fovStroke = Instance.new('UIStroke')
+                        fovStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                        fovStroke.Color = Color3.fromRGB(255, 255, 255)
+                        fovStroke.Thickness = 1.5
+                        fovStroke.Transparency = 0
+                        fovStroke.Parent = fovFrame
+                    end
+                end)
             end
         end
 
         local function UpdateFOVCircle()
-            ensureFOVCircleGui()
-            local showCircle = (AimLock.ShowFOV and AimLock.ShowFOV.Value == true) and not (State and State.PanicMode)
-            if showCircle then
-                local center = UserInputService:GetMouseLocation()
-                local radius = degreesToScreenRadius(AimLock.FOV and AimLock.FOV.Value or 30)
-                local col = (AimLock.FOVColor and typeof(AimLock.FOVColor.Value) == 'Color3') and AimLock.FOVColor.Value or Color3.fromRGB(255, 255, 255)
-                local d = math.max(2, math.floor(radius * 2 + 0.5))
+            local showCircle = (AimLock.ShowFOV and AimLock.ShowFOV.Value == true)
 
-                fovFrame.Position = UDim2.fromOffset(center.X, center.Y)
-                fovFrame.Size = UDim2.fromOffset(d, d)
-                fovStroke.Color = col
-                fovFrame.Visible = true
-            else
+            if not showCircle then
+                if fovCircle then
+                    pcall(function() fovCircle.Visible = false end)
+                end
                 if fovFrame then
                     fovFrame.Visible = false
                 end
+                return
+            end
+
+            ensureFOVCircleGui()
+
+            local center = UserInputService:GetMouseLocation()
+            local radius = degreesToScreenRadius(AimLock.FOV and AimLock.FOV.Value or 30)
+            local col = (AimLock.FOVColor and typeof(AimLock.FOVColor.Value) == 'Color3') and AimLock.FOVColor.Value or Color3.fromRGB(255, 255, 255)
+            local safeRadius = math.max(4, radius)
+
+            if fovCircle then
+                pcall(function()
+                    fovCircle.Position = Vector2.new(center.X, center.Y)
+                    fovCircle.Radius = safeRadius
+                    fovCircle.Color = col
+                    fovCircle.Thickness = 1.5
+                    fovCircle.Transparency = 1
+                    fovCircle.Visible = true
+                end)
+            end
+
+            if fovFrame and fovStroke then
+                fovFrame.Position = UDim2.fromOffset(center.X, center.Y)
+                fovFrame.Size = UDim2.fromOffset(safeRadius * 2, safeRadius * 2)
+                fovStroke.Color = col
+                fovStroke.Thickness = 1.5
+                fovStroke.Transparency = 0
+                fovFrame.Visible = true
             end
         end
 
@@ -16615,11 +16666,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                     BacktrackApi.clearPending()
                 end
             end
-            if AimLock.ShowFOV and AimLock.ShowFOV.Value == true then
-                UpdateFOVCircle()
-            elseif fovFrame and fovFrame.Visible then
-                fovFrame.Visible = false
-            end
+            UpdateFOVCircle()
             stepSilentAutoShot()
         end)
 
@@ -16632,13 +16679,21 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 pcall(function() AimLock.Connection:Disconnect() end)
                 AimLock.Connection = nil
             end
+            if fovCircle and type(fovCircle.Remove) == 'function' then
+                pcall(function() fovCircle:Remove() end)
+            end
+            fovCircle = nil
+            if AimLock and AimLock.FOVCircle and type(AimLock.FOVCircle.Remove) == 'function' then
+                pcall(function() AimLock.FOVCircle:Remove() end)
+            end
+            if AimLock then
+                AimLock.FOVCircle = nil
+            end
             if fovGui then
                 pcall(function() fovGui:Destroy() end)
                 fovGui = nil
-            end
-            if AimLock.FOVCircleGui then
-                pcall(function() AimLock.FOVCircleGui:Destroy() end)
-                AimLock.FOVCircleGui = nil
+                fovFrame = nil
+                fovStroke = nil
             end
             if hooked and oldGetAim then
                 pcall(function()
@@ -16699,6 +16754,7 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
                 isInitialLoaderActive = false
                 if screen then screen.Enabled = true end
                 if keybindScreen then keybindScreen.Enabled = true end
+                if setKeybindWindowVisible then setKeybindWindowVisible() end
             else
                 return
             end
@@ -17332,7 +17388,7 @@ trackConnection(safeConnect(UIS.InputEnded, function(input)
     applyLayoutSizes(true)
     pcall(applyTheme)
 
-    local syncWmVisibility
+    -- syncWmVisibility forward-declared above
     pcall(function()
         local watermarkGui = Instance.new('ScreenGui')
         watermarkGui.Name = 'BomzhoodWatermark'
