@@ -2027,9 +2027,10 @@ local Tab2 = TabBox:AddTab('Auto-Shot')
 Tab2:AddToggle('AutoShotEnabled', { Text = 'Enable Auto-Shot', Default = true })
 Tab2:AddLabel('Auto-Shot Key'):AddKeyPicker('AutoShotKey', { Default = 'X', NoUI = false, Text = 'Auto-Shot Key', Mode = 'Hold' })
 Tab2:AddToggle('AutoShotQuickSelectEnabled', { Text = 'Auto-Shot Quick Select (LeftAlt)', Default = true })
+Tab2:AddToggle('AutoShotTriggerMode', { Text = 'Trigger Mode', Default = false })
 Tab2:AddDropdown('AutoShotMode', {
     Text = 'Auto-Shot Mode',
-    Values = { 'SINGLE', 'BURST' },
+    Values = { 'SINGLE', 'BURST', 'AUTO' },
     Default = 'BURST',
     Multi = false,
     Callback = function() end
@@ -3048,6 +3049,132 @@ do
         end
     end
 
+    local function isDoubleBarrelTool(tool)
+        if not tool or not tool:IsA('Tool') then
+            return false
+        end
+        local name = tostring(tool.Name or '')
+        if name == '[Double-Barrel SG]' or name == '[Double-Barrel]' or name == 'Double-Barrel SG' or name == 'Double-Barrel' then
+            return true
+        end
+        local lowered = string.lower(name)
+        return string.find(lowered, 'double', 1, true) ~= nil
+            or string.find(lowered, 'barrel', 1, true) ~= nil
+            or lowered == 'db'
+            or lowered == '[db]'
+    end
+
+    local function getEquippedTool()
+        local char = LocalPlayer and LocalPlayer.Character
+        if char then
+            return char:FindFirstChildOfClass('Tool')
+        end
+        return nil
+    end
+
+    local function resolveEffectiveAutoShotMode()
+        local mode = string.upper(readString('AutoShotMode', 'BURST'))
+        if mode == 'AUTO' then
+            local tool = getEquippedTool()
+            if isDoubleBarrelTool(tool) then
+                return 'SINGLE'
+            end
+            return 'BURST'
+        end
+        return mode
+    end
+
+    local function isCrosshairOnCharacterHitbox(char)
+        if not char then
+            return false
+        end
+        local cam = Workspace.CurrentCamera
+        if not cam then
+            return false
+        end
+        local vp = cam.ViewportSize
+        if not vp or vp.X <= 0 or vp.Y <= 0 then
+            return false
+        end
+
+        local mousePos = UIS:GetMouseLocation()
+        if mousePos.X <= 0 or mousePos.Y <= 0 or mousePos.X > vp.X or mousePos.Y > vp.Y then
+            mousePos = Vector2.new(vp.X * 0.5, vp.Y * 0.5)
+        end
+
+        -- 1. Direct 3D Raycast from crosshair
+        local ray = cam:ViewportPointToRay(mousePos.X, mousePos.Y)
+        if ray then
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local exclude = {}
+            if LocalPlayer and LocalPlayer.Character then
+                table.insert(exclude, LocalPlayer.Character)
+            end
+            local ghosts = Workspace:FindFirstChild('BacktrackGhosts')
+            if ghosts then
+                table.insert(exclude, ghosts)
+            end
+            params.FilterDescendantsInstances = exclude
+
+            local result = Workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+            if result and result.Instance and result.Instance:IsDescendantOf(char) then
+                return true
+            end
+        end
+
+        -- 2. mouse.Target under cursor
+        local mouse = LocalPlayer and LocalPlayer:GetMouse()
+        if mouse and mouse.Target and mouse.Target:IsDescendantOf(char) then
+            return true
+        end
+
+        -- 3. In-game Hitbox Part / Body Parts 2D screen projection
+        local hitboxPart = char:FindFirstChild('Hitbox') or char:FindFirstChild('hitbox')
+            or char:FindFirstChild('HumanoidRootPart') or char:FindFirstChild('Torso')
+            or char:FindFirstChild('UpperTorso') or char:FindFirstChild('Head')
+
+        if hitboxPart and hitboxPart:IsA('BasePart') then
+            local cf = hitboxPart.CFrame
+            local half = hitboxPart.Size * 0.5
+            local sx, sy, sz = half.X, half.Y, half.Z
+
+            local minX, minY = math.huge, math.huge
+            local maxX, maxY = -math.huge, -math.huge
+            local anyOnScreen = false
+
+            local corners = {
+                cf:PointToWorldSpace(Vector3.new(-sx, -sy, -sz)),
+                cf:PointToWorldSpace(Vector3.new( sx, -sy, -sz)),
+                cf:PointToWorldSpace(Vector3.new(-sx,  sy, -sz)),
+                cf:PointToWorldSpace(Vector3.new( sx,  sy, -sz)),
+                cf:PointToWorldSpace(Vector3.new(-sx, -sy,  sz)),
+                cf:PointToWorldSpace(Vector3.new( sx, -sy,  sz)),
+                cf:PointToWorldSpace(Vector3.new(-sx,  sy,  sz)),
+                cf:PointToWorldSpace(Vector3.new( sx,  sy,  sz)),
+            }
+            for i = 1, 8 do
+                local sp, onScreen = cam:WorldToViewportPoint(corners[i])
+                if sp.Z > 0 then
+                    anyOnScreen = true
+                    if sp.X < minX then minX = sp.X end
+                    if sp.X > maxX then maxX = sp.X end
+                    if sp.Y < minY then minY = sp.Y end
+                    if sp.Y > maxY then maxY = sp.Y end
+                end
+            end
+
+            if anyOnScreen and maxX >= minX and maxY >= minY then
+                local mx, my = mousePos.X, mousePos.Y
+                if mx >= minX and mx <= maxX and my >= minY and my <= maxY then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
     local function handleAutoShot()
         syncAutoShotTargetFromOption()
         if autoShotTargetPlayerName == '' then
@@ -3096,8 +3223,58 @@ do
                 return
             end
 
-            local mode = string.upper(readString('AutoShotMode', 'BURST'))
-            if mode == 'SINGLE' then
+            local isTriggerMode = readToggle('AutoShotTriggerMode', false)
+            if isTriggerMode then
+                -- Trigger mode: после кд ждем, пока прицел не будет наведен на хитбокс
+                local startWait = os.clock()
+                local maxWaitSec = 2.5
+                local foundHitbox = false
+
+                while (os.clock() - startWait) < maxWaitSec do
+                    if Library.Unloaded or not readToggle('AutoShotEnabled', true) or not isAutoShotKeyActive() then
+                        break
+                    end
+                    local targetPlayer = Players:FindFirstChild(autoShotTargetPlayerName)
+                    if not targetPlayer or IsPlayerKO(targetPlayer) then
+                        break
+                    end
+                    local targetChar = targetPlayer.Character
+                    if not targetChar then
+                        break
+                    end
+
+                    -- Проверяем наведение на хитбокс выбранного таргета
+                    if isCrosshairOnCharacterHitbox(targetChar) then
+                        foundHitbox = true
+                        break
+                    end
+
+                    -- Также разрешаем выстрел если прицел наведен на любого другого живого врага
+                    local anyEnemyHit = false
+                    for _, pl in ipairs(Players:GetPlayers()) do
+                        if pl ~= LocalPlayer and pl ~= targetPlayer and not isSharedFriendRole(pl) and not IsPlayerKO(pl) then
+                            if isCrosshairOnCharacterHitbox(pl.Character) then
+                                anyEnemyHit = true
+                                break
+                            end
+                        end
+                    end
+                    if anyEnemyHit then
+                        foundHitbox = true
+                        break
+                    end
+
+                    RunService.Heartbeat:Wait()
+                end
+
+                if not foundHitbox then
+                    isAutoShotRunning = false
+                    return
+                end
+            end
+
+            local effectiveMode = resolveEffectiveAutoShotMode()
+            if effectiveMode == 'SINGLE' then
                 performMouseClick(0.01)
             else
                 while true do
@@ -3110,12 +3287,34 @@ do
                     if autoShotTargetPlayerName == '' then
                         break
                     end
-                    if string.upper(readString('AutoShotMode', 'BURST')) ~= 'BURST' then
+                    if resolveEffectiveAutoShotMode() ~= 'BURST' then
                         break
                     end
                     if not isAutoShotKeyActive() then
                         break
                     end
+
+                    -- В Trigger mode продолжаем очередь только пока прицел удерживается на хитбоксе
+                    if isTriggerMode then
+                        local targetPlayer = Players:FindFirstChild(autoShotTargetPlayerName)
+                        local onBox = false
+                        if targetPlayer and not IsPlayerKO(targetPlayer) and isCrosshairOnCharacterHitbox(targetPlayer.Character) then
+                            onBox = true
+                        else
+                            for _, pl in ipairs(Players:GetPlayers()) do
+                                if pl ~= LocalPlayer and not isSharedFriendRole(pl) and not IsPlayerKO(pl) then
+                                    if isCrosshairOnCharacterHitbox(pl.Character) then
+                                        onBox = true
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        if not onBox then
+                            break
+                        end
+                    end
+
                     performMouseClick(0.001)
                     task.wait(0.01)
                 end
@@ -3432,6 +3631,8 @@ do
             end
         end)
     end))
+
+
 
     Library:OnUnload(function()
         for _, conn in ipairs(runtimeConnections) do
@@ -4593,18 +4794,6 @@ do
                 local shared = getSharedPlayerRole(player)
                 if shared then
                     return shared
-                end
-                local targetName = ''
-                pcall(function()
-                    if Options and Options.AutoShotTargetPlayer then
-                        targetName = extractSelectedName(Options.AutoShotTargetPlayer.Value)
-                    end
-                end)
-                local targetNorm = normalizeName(targetName)
-                local nameNorm = normalizeName(player and player.Name or '')
-                local displayNorm = normalizeName(player and (player.DisplayName or '') or '')
-                if targetNorm ~= '' and (targetNorm == nameNorm or targetNorm == displayNorm) then
-                    return 'Target'
                 end
                 if isInSelection('TriggerWhitelist', player) then
                     return 'Friend'
@@ -6408,6 +6597,7 @@ do
     State.SpectatorListY = ensureOption('SpectatorListY', 96)
     State.AutoShotEnabled = ensureToggle('AutoShotEnabled', true)
     State.AutoShotQuickSelectEnabled = ensureToggle('AutoShotQuickSelectEnabled', true)
+    State.AutoShotTriggerMode = ensureToggle('AutoShotTriggerMode', false)
 
     State.TriggerDelay = ensureOption('TriggerDelay', 0)
     State.TriggerMode = ensureOption('TriggerMode', 'Hitbox')
@@ -11899,7 +12089,8 @@ trackConnection(safeConnect(Players.PlayerRemoving, function()
         createToggle(autoShotSection, 'Enable Auto-Shot', State.AutoShotEnabled)
         createKeybindRow(autoShotSection, 'Auto-Shot Keybind', State.AutoShotKey)
         createToggle(autoShotSection, 'Auto-Shot Quick Select (LeftAlt)', State.AutoShotQuickSelectEnabled)
-        createCycleOptionRow(autoShotSection, 'Auto-Shot Mode', State.AutoShotMode, { 'SINGLE', 'BURST' })
+        createToggle(autoShotSection, 'Trigger Mode', State.AutoShotTriggerMode)
+        createCycleOptionRow(autoShotSection, 'Auto-Shot Mode', State.AutoShotMode, { 'SINGLE', 'BURST', 'AUTO' })
         createSinglePlayerDropdown(autoShotSection, 'Auto-Shot Target', State.AutoShotTargetPlayer)
         createSlider(autoShotSection, 'Auto-Shot Min Delay (ms)', State.AutoShotDelayMin, 0, 500, 1, ' ms')
         createSlider(autoShotSection, 'Auto-Shot Max Delay (ms)', State.AutoShotDelayMax, 0, 500, 1, ' ms')
